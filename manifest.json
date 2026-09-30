@@ -17,7 +17,6 @@
     "proxy",
     "webRequest",
     "webRequestBlocking",
-    "<all_urls>",
     "privacy",
     "tabs"
   ],
