@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Preston VPN</title>
+  <link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+  <div class="popup-container">
+    <div class="header">
+      <div class="logo-container">
+        <img src="icons/icon128.png" alt="Preston VPN Logo" class="logo" />
+        <h1 class="title">Preston VPN</h1>
+      </div>
+      <div class="status-badge" id="statusBadge">Disconnected</div>
+    </div>
+
+    <div class="connection-info">
+      <div class="ip-display">
+        <span class="label">Current IP:</span>
+        <span class="value" id="currentIp">--.--.--.--</span>
+      </div>
+      <div class="location-display">
+        <span class="label">Exit Location:</span>
+        <span class="value" id="currentLocation">None</span>
+      </div>
+      <div class="p2p-status">
+        <span class="label">P2P Node:</span>
+        <span class="value" id="p2pStatus">--</span>
+      </div>
+    </div>
+
+    <div class="toggle-section">
+      <label class="switch">
+        <input type="checkbox" id="vpnToggle" />
+        <span class="slider"></span>
+      </label>
+      <span class="toggle-label" id="toggleLabel">Connect VPN</span>
+    </div>
+
+    <div class="kill-switch">
+      <div class="ks-row">
+        <span class="label">Kill Switch</span>
+        <label class="switch-small">
+          <input type="checkbox" id="killSwitchToggle" checked />
+          <span class="slider-small"></span>
+        </label>
+      </div>
+      <span class="hint">Blocks internet if VPN disconnects</span>
+    </div>
+
+    <div class="location-section" id="locationSection" style="display: none;">
+      <label for="locationSelect" class="section-label">Select P2P Location:</label>
+      <select id="locationSelect" class="location-select">
+        <option value="" disabled selected>-- Choose a location --</option>
+      </select>
+    </div>
+
+    <div class="footer">
+      <div class="policy-link">
+        <span class="hint">No account required &middot; No logs policy</span>
+      </div>
+    </div>
+  </div>
+  <script src="popup.js"></script>
+</body>
+</html>

@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Preston VPN Settings</title>
+  <link rel="stylesheet" href="options.css" />
+</head>
+<body>
+  <div class="options-container">
+    <h1>Preston VPN Settings</h1>
+    
+    <div class="settings-section">
+      <h2>Privacy & Security</h2>
+      <div class="setting-item">
+        <label for="strictNoLogs" class="setting-label">
+          Enable strict no-logs mode
+        </label>
+        <div class="toggle-container">
+          <input type="checkbox" id="strictNoLogs" />
+          <span class="slider"></span>
+        </div>
+      </div>
+      
+      <div class="setting-item">
+        <label for="autoConnect" class="setting-label">
+          Auto-connect on browser startup
+        </label>
+        <div class="toggle-container">
+          <input type="checkbox" id="autoConnect" />
+          <span class="slider"></span>
+        </div>
+      </div>
+      
+      <div class="setting-item">
+        <label for="dnsLeakProtection" class="setting-label">
+          Enable DNS leak protection
+        </label>
+        <div class="toggle-container">
+          <input type="checkbox" id="dnsLeakProtection" checked />
+          <span class="slider"></span>
+        </div>
+      </div>
+      
+      <div class="setting-item">
+        <label for="webrtcLeakProtection" class="setting-label">
+          Enable WebRTC leak protection
+        </label>
+        <div class="toggle-container">
+          <input type="checkbox" id="webrtcLeakProtection" checked />
+          <span class="slider"></span>
+        </div>
+      </div>
+    </div>
+    
+    <div class="settings-section">
+      <h2>Connection Settings</h2>
+      <div class="setting-item">
+        <label for="connectionTimeout" class="setting-label">
+          Connection timeout (seconds)
+        </label>
+        <input type="number" id="connectionTimeout" min="5" max="30" value="15" />
+      </div>
+      
+      <div class="setting-item">
+        <label for="reconnectAttempts" class="setting-label">
+          Reconnect attempts
+        </label>
+        <input type="number" id="reconnectAttempts" min="1" max="10" value="3" />
+      </div>
+    </div>
+    
+    <div class="settings-section">
+      <h2>P2P Network</h2>
+      <div class="setting-item">
+        <label for="preferredNodeType" class="setting-label">
+          Preferred node type
+        </label>
+        <select id="preferredNodeType">
+          <option value="balanced">Balanced</option>
+          <option value="speed-optimized">Speed Optimized</option>
+          <option value="privacy-optimized">Privacy Optimized</option>
+        </select>
+      </div>
+    </div>
+    
+    <div class="settings-section">
+      <h2>Data & Privacy</h2>
+      <div class="setting-item">
+        <p class="info-text">
+          Preston VPN follows a strict no-logs policy. No browsing history, 
+          connection timestamps, or session data is stored. Only your current 
+          IP address is temporarily used for connection establishment and 
+          is immediately deleted when the VPN is disconnected.
+        </p>
+      </div>
+      
+      <div class="setting-item">
+        <button id="clearDataBtn" class="danger-button">
+          Clear All Stored Data
+        </button>
+      </div>
+    </div>
+    
+    <div class="action-buttons">
+      <button id="saveBtn" class="primary-button">Save Settings</button>
+      <button id="resetBtn" class="secondary-button">Reset to Defaults</button>
+    </div>
+  </div>
+  
+  <script src="options.js"></script>
+</body>
+</html>
