@@ -1,70 +1,147 @@
-# Preston VPN Icon Generator
-# Generates PNG icons for the extension using pure Python (no external deps)
+#!/usr/bin/env python3
+"""
+Preston VPN Icon Generator
+Generates valid PNG icons for the browser extension.
+"""
 
 import os
 import struct
 import zlib
 
-def chunk(chunk_type, data):
-    chunk_len = len(data)
-    crc_data = chunk_type + data
-    crc = zlib.crc32(crc_data) & 0xffffffff
-    return struct.pack(">I", chunk_len) + data + struct.pack(">I", crc)
 
-def create_vpn_icon(width, height, output_path):
+def create_valid_png(width, height, output_path):
+    """Create a valid PNG file with proper chunks."""
+    
     # PNG signature
-    png = b'\x89PNG\r\n\x1a\n'
+    signature = b'\x89PNG\r\n\x1a\n'
+    
+    # Build IHDR chunk data
+    # Width (4 bytes), Height (4 bytes), Bit depth (1), Color type (1=grayscale), Compression (0), Filter (0), Interlace (0)
+    ihdr_data = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)
+    
+    # Calculate CRC for IHDR
+    ihdr_crc = zlib.crc32(b'IHDR' + ihdr_data) & 0xffffffff
+    
+    # Build IHDR chunk
+    ihdr_chunk = struct.pack(">I", 13)  # Length of data
+    ihdr_chunk += b'IHDR'
+    ihdr_chunk += ihdr_data
+    ihdr_chunk += struct.pack(">I", ihdr_crc)
+    
+    # Build image data (raw)
+    raw_data = b''
+    for y in range(height):
+        raw_data += b'\x00'  # Filter byte for each row
+        for x in range(width):
+            # Calculate color based on position (VPN shield pattern)
+            cx, cy = width // 2, height // 2
+            dx = abs(x - cx) / cx if cx > 0 else 0
+            dy = abs(y - cy) / cy if cy > 0 else 0
+            
+            # Create a shield-like shape
+            is_shield = (dx < 0.85) and (dy < 0.85) and (dx + dy < 1.4)
+            
+            if is_shield:
+                # Dark blue for shield body
+                r, g, b = 0x1a, 0x1a, 0x2e
+            else:
+                # Dark background
+                r, g, b = 0x0f, 0x34, 0x60
+            
+            raw_data += bytes([r, g, b])
+    
+    # Compress image data
+    compressed = zlib.compress(raw_data, 9)
+    
+    # IDAT chunk
+    idat_crc = zlib.crc32(b'IDAT' + compressed) & 0xffffffff
+    idat_chunk = struct.pack(">I", len(compressed))
+    idat_chunk += b'IDAT'
+    idat_chunk += compressed
+    idat_chunk += struct.pack(">I", idat_crc)
+    
+    # IEND chunk
+    iend_crc = zlib.crc32(b'IEND' + b'') & 0xffffffff
+    iend_chunk = struct.pack(">I", 0)
+    iend_chunk += b'IEND'
+    iend_chunk += struct.pack(">I", iend_crc)
+    
+    # Combine all chunks
+    png_data = signature + ihdr_chunk + idat_chunk + iend_chunk
+    
+    # Write to file
+    with open(output_path, 'wb') as f:
+        f.write(png_data)
+    
+    return True
+
+
+def create_small_icon(size, output_path):
+    """Create a small icon with a simplified design."""
+    
+    # PNG signature
+    signature = b'\x89PNG\r\n\x1a\n'
     
     # IHDR chunk
-    ihdr_data = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)
-    png += chunk(b'IHDR', ihdr_data)
+    ihdr_data = struct.pack(">IIBBBBB", size, size, 8, 2, 0, 0, 0)
+    ihdr_crc = zlib.crc32(b'IHDR' + ihdr_data) & 0xffffffff
+    ihdr_chunk = struct.pack(">I", 13) + b'IHDR' + ihdr_data + struct.pack(">I", ihdr_crc)
     
-    # Build pixel data
+    # Image data
     raw_data = b''
-    cx, cy = width // 2, height // 2
-    for y in range(height):
-        raw_data += b'\x00'  # filter byte
-        for x in range(width):
-            # Calculate distance from center
-            dx = abs(x - cx)
-            dy = abs(y - cy)
-            
-            # Shield shape approximation
-            is_shield = (dx < cx * 0.85) and (dy < cy * 0.85) and (dx + dy < cx + cy * 0.7)
-            
-            # Check if inside the shield
-            if is_shield:
-                # Draw a checkmark or keyhole pattern
-                is_accent = False
-                # Simple keyhole shape
-                if dx < 3 and dy > cy * 0.3:
-                    is_accent = True
-                if dy > cy * 0.5 and dx < 4:
-                    is_accent = True
-                
-                if is_accent:
-                    raw_data += bytes((0xff, 0xff, 0xff))  # White accent
-                else:
-                    raw_data += bytes((0x16, 0x21, 0x3e))  # Dark blue
-            else:
-                raw_data += bytes((0x0f, 0x34, 0x60))  # Blue background
+    cx, cy = size // 2, size // 2
     
+    for y in range(size):
+        raw_data += b'\x00'  # Filter byte
+        for x in range(size):
+            dx = abs(x - cx) / cx if cx > 0 else 0
+            dy = abs(y - cy) / cy if cy > 0 else 0
+            
+            # Shield shape
+            is_shield = (dx < 0.85) and (dy < 0.85) and (dx + dy < 1.4)
+            
+            if is_shield:
+                # Accent color (red/pink) for shield body
+                r, g, b = 0xe9, 0x45, 0x60
+            else:
+                # Dark background
+                r, g, b = 0x1a, 0x1a, 0x2e
+            
+            raw_data += bytes([r, g, b])
+    
+    # Compress and write
     compressed = zlib.compress(raw_data, 9)
-    png += chunk(b'IDAT', compressed)
-    png += chunk(b'IEND', b'')
+    idat_crc = zlib.crc32(b'IDAT' + compressed) & 0xffffffff
+    idat_chunk = struct.pack(">I", len(compressed)) + b'IDAT' + compressed + struct.pack(">I", idat_crc)
+    
+    # IEND
+    iend_crc = zlib.crc32(b'IEND' + b'') & 0xffffffff
+    iend_chunk = struct.pack(">I", 0) + b'IEND' + struct.pack(">I", iend_crc)
+    
+    png_data = signature + ihdr_chunk + idat_chunk + iend_chunk
     
     with open(output_path, 'wb') as f:
-        f.write(png)
+        f.write(png_data)
     
-    print(f"Created: {output_path}")
+    return True
+
 
 if __name__ == "__main__":
-    icons_dir = os.path.join(os.path.dirname(__file__), "icons")
+    icons_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "icons")
     os.makedirs(icons_dir, exist_ok=True)
     
-    sizes = [16, 32, 48, 128]
-    for size in sizes:
-        path = os.path.join(icons_dir, f"icon{size}.png")
-        create_vpn_icon(size, size, path)
+    # Generate icons
+    icons = {
+        16: "icon16.png",
+        32: "icon32.png",
+        48: "icon48.png",
+        128: "icon128.png"
+    }
+    
+    print("Generating Preston VPN icons...")
+    for size, filename in icons.items():
+        path = os.path.join(icons_dir, filename)
+        create_small_icon(size, path)
+        print(f"  Created: {path} ({size}x{size})")
     
     print("\nAll icons generated successfully!")
