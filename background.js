@@ -132,6 +132,16 @@ function recordIPAddress() {
 // P2P Connection Management
 // ============================================================
 
+// Returns a readable, JSON-serializable message for anything that was thrown or
+// rejected. Chrome APIs reject with opaque objects that have no useful
+// message, so normalise them here.
+function toErrorMessage(err, fallback) {
+  if (err === null || err === undefined) return fallback;
+  if (typeof err === "string") return err;
+  if (typeof err.message === "string" && err.message) return err.message;
+  return fallback;
+}
+
 async function establishP2PConnection(locationNode) {
   const node = P2P_NODES.find(n => n.id === locationNode);
   if (!node) {
@@ -153,16 +163,36 @@ async function establishP2PConnection(locationNode) {
   currentProxyConfig = proxyConfig;
 
   await new Promise((resolve, reject) => {
-    chrome.proxy.settings.set(
-      { values: { proxy: JSON.stringify(proxyConfig) }, scope: "regular" },
-      () => {
-        if (chrome.runtime.lastError) {
-          reject(chrome.runtime.lastError);
-        } else {
-          resolve();
+    let settled = false;
+    const succeed = () => {
+      if (settled) return;
+      settled = true;
+      resolve();
+    };
+    const fail = (message) => {
+      if (settled) return;
+      settled = true;
+      reject(new Error(message));
+    };
+
+    try {
+      chrome.proxy.settings.set(
+        { value: proxyConfig, scope: "regular" },
+        () => {
+          const lastError = chrome.runtime.lastError;
+          if (lastError) {
+            fail(toErrorMessage(lastError, "Failed to apply proxy settings"));
+          } else {
+            succeed();
+          }
         }
-      }
-    );
+      );
+    } catch (e) {
+      // Binding-level failures (e.g. an argument that does not match the
+      // ProxyConfig schema) surface here instead of escaping as
+      // "Invalid invocation".
+      fail(toErrorMessage(e, "Failed to apply proxy settings"));
+    }
   });
 
   activeExitNode = node;
@@ -194,8 +224,22 @@ async function disconnectP2PConnection() {
 function removeProxyRouting() {
   return new Promise((resolve) => {
     try {
-      chrome.proxy.settings.clear({ scope: "regular" }, resolve);
+      // The first argument of chrome.proxy.settings.clear is a ProxyConfig,
+      // not a details object with a "scope" key.
+      chrome.proxy.settings.clear({ mode: "direct" }, () => {
+        if (chrome.runtime.lastError) {
+          console.warn(
+            "Error clearing proxy routing:",
+            toErrorMessage(chrome.runtime.lastError, "unknown proxy error")
+          );
+        }
+        resolve();
+      });
     } catch (e) {
+      console.warn(
+        "Error clearing proxy routing:",
+        toErrorMessage(e, "unknown proxy error")
+      );
       resolve();
     }
   });
@@ -215,43 +259,68 @@ function removeKillSwitch() {
   try {
     if (!isP2PConnected && !killSwitchEnabled) {
       chrome.proxy.settings.set(
-        { values: { proxy: JSON.stringify({ mode: "direct" }) }, scope: "regular" },
+        { value: { mode: "direct" }, scope: "regular" },
         () => {
           if (chrome.runtime.lastError) {
-            console.warn("Error clearing proxy:", chrome.runtime.lastError);
+            console.warn(
+              "Error clearing proxy:",
+              toErrorMessage(chrome.runtime.lastError, "unknown proxy error")
+            );
           }
         }
       );
     }
-  } catch (e) {}
+  } catch (e) {
+    console.warn("Error clearing proxy:", toErrorMessage(e, "unknown proxy error"));
+  }
   console.log("Kill switch removed (proxy-based)");
 }
 
 function applyKillSwitch() {
   if (!killSwitchEnabled) {
     if (!isP2PConnected) {
-      chrome.proxy.settings.set(
-        { values: { proxy: JSON.stringify({ mode: "direct" }) }, scope: "regular" },
-        () => {
-          if (chrome.runtime.lastError) {
-            console.warn("Error setting direct proxy:", chrome.runtime.lastError);
+      try {
+        chrome.proxy.settings.set(
+          { value: { mode: "direct" }, scope: "regular" },
+          () => {
+            if (chrome.runtime.lastError) {
+              console.warn(
+                "Error setting direct proxy:",
+                toErrorMessage(chrome.runtime.lastError, "unknown proxy error")
+              );
+            }
           }
-        }
-      );
+        );
+      } catch (e) {
+        console.warn(
+          "Error setting direct proxy:",
+          toErrorMessage(e, "unknown proxy error")
+        );
+      }
     }
     return;
   }
 
   if (isP2PConnected) {
     if (currentProxyConfig) {
-      chrome.proxy.settings.set(
-        { values: { proxy: JSON.stringify(currentProxyConfig) }, scope: "regular" },
-        () => {
-          if (chrome.runtime.lastError) {
-            console.warn("Error restoring proxy:", chrome.runtime.lastError);
+      try {
+        chrome.proxy.settings.set(
+          { value: currentProxyConfig, scope: "regular" },
+          () => {
+            if (chrome.runtime.lastError) {
+              console.warn(
+                "Error restoring proxy:",
+                toErrorMessage(chrome.runtime.lastError, "unknown proxy error")
+              );
+            }
           }
-        }
-      );
+        );
+      } catch (e) {
+        console.warn(
+          "Error restoring proxy:",
+          toErrorMessage(e, "unknown proxy error")
+        );
+      }
     }
     console.log("Kill switch: VPN active, traffic routed through P2P tunnel");
   } else {
@@ -267,16 +336,26 @@ function applyKillSwitch() {
       }
     };
 
-    chrome.proxy.settings.set(
-      { values: { proxy: JSON.stringify(blockProxyConfig) }, scope: "regular" },
-      () => {
-        if (chrome.runtime.lastError) {
-          console.warn("Error applying kill switch proxy:", chrome.runtime.lastError);
-        } else {
-          console.log("Kill switch: VPN inactive, all traffic blocked via proxy");
+    try {
+      chrome.proxy.settings.set(
+        { value: blockProxyConfig, scope: "regular" },
+        () => {
+          if (chrome.runtime.lastError) {
+            console.warn(
+              "Error applying kill switch proxy:",
+              toErrorMessage(chrome.runtime.lastError, "unknown proxy error")
+            );
+          } else {
+            console.log("Kill switch: VPN inactive, all traffic blocked via proxy");
+          }
         }
-      }
-    );
+      );
+    } catch (e) {
+      console.warn(
+        "Error applying kill switch proxy:",
+        toErrorMessage(e, "unknown proxy error")
+      );
+    }
   }
 }
 
@@ -285,15 +364,44 @@ function triggerKillSwitch() {
 
   applyKillSwitch();
 
-  chrome.tabs.query({}, (tabs) => {
-    tabs.forEach(tab => {
-      chrome.tabs.sendMessage(tab.tabId, {
+  const notifyTab = (tabId) => {
+    try {
+      // Works with both the promise-returning and the callback form.
+      const maybePromise = chrome.tabs.sendMessage(tabId, {
         type: "VPN_STATE_CHANGE",
         active: false,
         killSwitch: true
-      }).catch(() => {});
+      }, () => {
+        // Reading lastError marks it as handled; tabs without the content
+        // script simply report "Could not establish connection".
+        void chrome.runtime.lastError;
+      });
+      if (maybePromise && typeof maybePromise.catch === "function") {
+        maybePromise.catch(() => {});
+      }
+    } catch (e) {
+      // No receiving end for this tab - nothing to do.
+    }
+  };
+
+  try {
+    const maybePromise = chrome.tabs.query({}, (tabs) => {
+      if (chrome.runtime.lastError || !tabs) return;
+      tabs.forEach((tab) => {
+        if (typeof tab.tabId === "number") {
+          notifyTab(tab.tabId);
+        }
+      });
     });
-  });
+    if (maybePromise && typeof maybePromise.catch === "function") {
+      maybePromise.catch(() => {});
+    }
+  } catch (e) {
+    console.warn(
+      "Kill switch: failed to query tabs:",
+      toErrorMessage(e, "unknown tabs error")
+    );
+  }
 
   console.warn("Kill switch triggered - all traffic blocked via proxy");
 }
@@ -365,20 +473,44 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     APP_VISIBLE: handleAppVisible
   };
 
-  const handler = handlers[message.type];
-  if (handler) {
-    const result = handler(message, sendResponse);
-    if (result instanceof Promise || (result && typeof result.then === "function")) {
-      result.catch((err) => {
-        console.error("Handler error:", err);
-        sendResponse({ success: false, error: err.message });
-      });
-      return true;
-    }
-    return true;
+  const handler = message && handlers[message.type];
+  if (!handler) {
+    return false;
   }
 
-  return false;
+  // sendResponse may only be called once per message, otherwise the port is
+  // torn down and the caller sees an opaque error instead of the response.
+  let responded = false;
+  const respondOnce = (payload) => {
+    if (responded) return;
+    responded = true;
+    try {
+      sendResponse(payload);
+    } catch (e) {
+      console.error(
+        "Failed to send response:",
+        toErrorMessage(e, "unknown messaging error")
+      );
+    }
+  };
+
+  try {
+    const result = handler(message, respondOnce);
+    if (result instanceof Promise || (result && typeof result.then === "function")) {
+      result.catch((err) => {
+        console.error("Handler error:", toErrorMessage(err, "unknown error"));
+        respondOnce({
+          success: false,
+          error: toErrorMessage(err, "Unknown error")
+        });
+      });
+    }
+  } catch (err) {
+    console.error("Handler error:", toErrorMessage(err, "unknown error"));
+    respondOnce({ success: false, error: toErrorMessage(err, "Unknown error") });
+  }
+
+  return true;
 });
 
 async function handleToggleVPN(message, sendResponse) {
@@ -404,7 +536,7 @@ async function handleToggleVPN(message, sendResponse) {
     sendResponse({ success: true, isConnected: isVPNEnabled });
   } catch (err) {
     isVPNEnabled = false;
-    sendResponse({ success: false, error: err.message });
+    sendResponse({ success: false, error: toErrorMessage(err, "Failed to toggle VPN") });
   }
   return true;
 }
@@ -426,7 +558,7 @@ async function handleSetExitLocation(message, sendResponse) {
 
     sendResponse({ success: true });
   } catch (err) {
-    sendResponse({ success: false, error: err.message });
+    sendResponse({ success: false, error: toErrorMessage(err, "Failed to set location") });
   }
   return true;
 }
