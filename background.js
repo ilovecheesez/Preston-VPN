@@ -99,42 +99,29 @@ let killSwitchEnabled = true;
 let currentIP = null;
 let p2pStatus = "disconnected";
 let healthCheckInterval = null;
+let isP2PConnected = false;
+let activeExitNode = null;
+let currentProxyConfig = null;
 
 // ============================================================
 // No-Logs Policy Enforcement
 // ============================================================
 
-/**
- * Immediately delete all logged IP address data.
- * This implements the strict no-logs policy:
- * - IP is never stored long-term
- * - Deleted on disconnect, disable, or removal
- */
 function purgeIPData() {
-  // Remove the IP from storage immediately
   chrome.storage.local.remove(
     ["last_recorded_ip_preston_vpn", "recorded_ip_timestamp_preston_vpn"],
     () => {
       currentIP = null;
       p2pStatus = "disconnected";
-      // Log to console only (not stored anywhere)
       console.log("No-logs: IP data purged from storage");
     }
   );
 }
 
-/**
- * Record IP address momentarily for operational use only.
- * Immediately queued for deletion.
- * This ensures we capture the IP only during an active session.
- */
 function recordIPAddress() {
-  // We record only the IP for the duration of the session
-  // and immediately attempt deletion
   chrome.storage.local.set(
     { last_recorded_ip_preston_vpn: null },
     () => {
-      // Immediately delete - we don't keep it at all
       chrome.storage.local.remove(["last_recorded_ip_preston_vpn"]);
       currentIP = "(active session)";
     }
@@ -145,33 +132,25 @@ function recordIPAddress() {
 // P2P Connection Management
 // ============================================================
 
-/**
- * Establish a P2P tunnel to the selected geographic exit node.
- * In a real implementation, this would:
- *   1. Connect to the P2P signaling server
- *   2. Discover nearby peers in the target region
- *   3. Establish a WebRTC DataChannel to the exit node
- *   4. Route all browser traffic through the P2P tunnel
- */
 async function establishP2PConnection(locationNode) {
   const node = P2P_NODES.find(n => n.id === locationNode);
   if (!node) {
     throw new Error(`Unknown P2P node: ${locationNode}`);
   }
 
-  // Configure proxy routing through the P2P exit node
-  // Using SOCKS5 proxy pointing to the local P2P tunnel endpoint
   const proxyConfig = {
     mode: "fixed_servers",
     rules: {
       singleProxy: {
         scheme: "socks5",
-        host: "127.0.0.1", // Local P2P tunnel endpoint
+        host: "127.0.0.1",
         port: 1080
       },
       bypassList: ["<local>"]
     }
   };
+
+  currentProxyConfig = proxyConfig;
 
   await new Promise((resolve, reject) => {
     chrome.proxy.settings.set(
@@ -186,41 +165,32 @@ async function establishP2PConnection(locationNode) {
     );
   });
 
+  activeExitNode = node;
+  isP2PConnected = true;
   exitLocation = locationNode;
   p2pStatus = `connected (${node.city}, ${node.country})`;
-  
-  // Record IP only for operational duration, then queue purge
+
   recordIPAddress();
-  
-  // Start health monitoring
   startHealthCheck();
 
   console.log(`P2P connection established to ${node.city}, ${node.country}`);
 }
 
-/**
- * Disconnect from the P2P exit node and clean up.
- */
-function disconnectP2PConnection() {
+async function disconnectP2PConnection() {
+  isP2PConnected = false;
+  activeExitNode = null;
   exitLocation = null;
   isVPNEnabled = false;
   p2pStatus = "disconnected";
-  
-  // Clear proxy settings
-  removeProxyRouting();
-  
-  // Stop health check
+
+  await removeProxyRouting();
+  currentProxyConfig = null;
   stopHealthCheck();
-  
-  // CRITICAL: No-logs policy - purge IP data immediately
   purgeIPData();
-  
+
   console.log("P2P connection disconnected - all IP data purged");
 }
 
-/**
- * Remove proxy routing settings.
- */
 function removeProxyRouting() {
   return new Promise((resolve) => {
     try {
@@ -232,84 +202,100 @@ function removeProxyRouting() {
 }
 
 // ============================================================
-// Kill Switch Implementation
+// Kill Switch Implementation (MV3 - Proxy-based)
 // ============================================================
 
-/**
- * Install the kill switch: blocks all web traffic when VPN is disconnected.
- * Uses webRequest + webRequestBlocking to cancel requests when not connected.
- */
 function installKillSwitch() {
   if (!killSwitchEnabled) return;
-
-  const blockHandler = (details) => {
-    // If VPN is not active and kill switch is enabled, block all requests
-    if (!isVPNEnabled && killSwitchEnabled) {
-      return { cancel: true };
-    }
-    return { cancel: false };
-  };
-
-  chrome.webRequest.onBeforeRequest.addListener(
-    blockHandler,
-    { urls: ["<all_urls>"] },
-    ["blocking"]
-  );
-
-  // Block webRequest from leaking DNS
-  chrome.webRequest.onBeforeDNSError.addListener(
-    (details) => {
-      if (!isVPNEnabled && killSwitchEnabled) {
-        return { cancel: true };
-      }
-    },
-    { urls: ["<all_urls>"] },
-    ["blocking"]
-  );
-
-  console.log("Kill switch installed");
+  applyKillSwitch();
+  console.log("Kill switch installed (proxy-based)");
 }
 
-/**
- * Remove the kill switch.
- */
 function removeKillSwitch() {
   try {
-    chrome.webRequest.onBeforeRequest.removeListeners(
-      (details) => {
-        if (!isVPNEnabled && killSwitchEnabled) {
-          return { cancel: true };
+    if (!isP2PConnected && !killSwitchEnabled) {
+      chrome.proxy.settings.set(
+        { values: { proxy: JSON.stringify({ mode: "direct" }) }, scope: "regular" },
+        () => {
+          if (chrome.runtime.lastError) {
+            console.warn("Error clearing proxy:", chrome.runtime.lastError);
+          }
         }
-        return { cancel: false };
-      }
-    );
-  } catch (e) {
-    // Listeners may already be removed
-  }
+      );
+    }
+  } catch (e) {}
+  console.log("Kill switch removed (proxy-based)");
 }
 
-/**
- * Trigger the kill switch immediately (used on disconnect).
- * This blocks all traffic until VPN is re-enabled.
- */
-function triggerKillSwitch() {
+function applyKillSwitch() {
   if (!killSwitchEnabled) {
-    // Even if disabled, we still block if VPN was supposed to be on
+    if (!isP2PConnected) {
+      chrome.proxy.settings.set(
+        { values: { proxy: JSON.stringify({ mode: "direct" }) }, scope: "regular" },
+        () => {
+          if (chrome.runtime.lastError) {
+            console.warn("Error setting direct proxy:", chrome.runtime.lastError);
+          }
+        }
+      );
+    }
     return;
   }
 
-  // Send notification to all content scripts
+  if (isP2PConnected) {
+    if (currentProxyConfig) {
+      chrome.proxy.settings.set(
+        { values: { proxy: JSON.stringify(currentProxyConfig) }, scope: "regular" },
+        () => {
+          if (chrome.runtime.lastError) {
+            console.warn("Error restoring proxy:", chrome.runtime.lastError);
+          }
+        }
+      );
+    }
+    console.log("Kill switch: VPN active, traffic routed through P2P tunnel");
+  } else {
+    const blockProxyConfig = {
+      mode: "fixed_servers",
+      rules: {
+        singleProxy: {
+          scheme: "http",
+          host: "127.0.0.1",
+          port: 0
+        },
+        bypassList: ["<local>"]
+      }
+    };
+
+    chrome.proxy.settings.set(
+      { values: { proxy: JSON.stringify(blockProxyConfig) }, scope: "regular" },
+      () => {
+        if (chrome.runtime.lastError) {
+          console.warn("Error applying kill switch proxy:", chrome.runtime.lastError);
+        } else {
+          console.log("Kill switch: VPN inactive, all traffic blocked via proxy");
+        }
+      }
+    );
+  }
+}
+
+function triggerKillSwitch() {
+  if (!killSwitchEnabled) return;
+
+  applyKillSwitch();
+
   chrome.tabs.query({}, (tabs) => {
     tabs.forEach(tab => {
       chrome.tabs.sendMessage(tab.tabId, {
-        type: "KILL_SWITCH_ACTIVATED"
-      }).catch(() => {
-        /* ignore if tab can't receive messages */
-      });
+        type: "VPN_STATE_CHANGE",
+        active: false,
+        killSwitch: true
+      }).catch(() => {});
     });
   });
 
-  console.warn("Kill switch activated - all traffic blocked");
+  console.warn("Kill switch triggered - all traffic blocked via proxy");
 }
 
 // ============================================================
@@ -321,8 +307,7 @@ function startHealthCheck() {
     clearInterval(healthCheckInterval);
   }
   healthCheckInterval = setInterval(() => {
-    if (isVPNEnabled && exitLocation) {
-      // Verify P2P tunnel is still active
+    if (isP2PConnected && activeExitNode) {
       verifyP2PTunnel();
     }
   }, 5000);
@@ -335,17 +320,9 @@ function stopHealthCheck() {
   }
 }
 
-/**
- * Verify the P2P tunnel is healthy; trigger kill switch if not.
- */
 function verifyP2PTunnel() {
-  // In production, check actual connectivity to the P2P tunnel
-  // For now, if we're enabled with a location, we maintain the state
-  // If the tunnel drops, we'd call triggerKillSwitch() here
-  
-  if (!exitLocation) {
-    // Lost P2P connection - activate kill switch
-    isVPNEnabled = false;
+  if (!activeExitNode) {
+    isP2PConnected = false;
     triggerKillSwitch();
   }
 }
@@ -354,26 +331,20 @@ function verifyP2PTunnel() {
 // Storage Cleanup (No-Logs)
 // ============================================================
 
-/**
- * Purge all stored data - called on disable and removal.
- * Ensures IMMEDIATE deletion of any IP data.
- */
 function purgeAllData() {
   const keysToRemove = [
     "last_recorded_ip_preston_vpn",
     "recorded_ip_timestamp_preston_vpn",
     "exitLocation_preston_vpn",
-    "exitLocationLabel_preston_vpn"
+    "killSwitch_preston_vpn"
   ];
 
   chrome.storage.local.remove(keysToRemove, () => {
     console.log("Preston VPN: All no-logs data purged");
   });
 
-  // Also clear proxy on removal/disable
+  stopHealthCheck();
   removeProxyRouting();
-  
-  // Clear currentIP in memory
   currentIP = null;
 }
 
@@ -381,7 +352,6 @@ function purgeAllData() {
 // Chrome Event Handlers
 // ============================================================
 
-// Handle messages from popup, content scripts, and options
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   const handlers = {
     TOGGLE_VPN: handleToggleVPN,
@@ -403,33 +373,34 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         console.error("Handler error:", err);
         sendResponse({ success: false, error: err.message });
       });
-      return true; // async response
+      return true;
     }
-    return true; // sync response
+    return true;
   }
-  
-  return false; // no handler
+
+  return false;
 });
 
 async function handleToggleVPN(message, sendResponse) {
   try {
     const { enabled } = message;
-    
+
     if (enabled) {
       isVPNEnabled = true;
-      
+
       if (!exitLocation) {
-        // Default to a random node
         exitLocation = P2P_NODES[0].id;
       }
-      
+
       await establishP2PConnection(exitLocation);
       p2pStatus = "active";
+      installKillSwitch();
     } else {
-      disconnectP2PConnection();
+      await disconnectP2PConnection();
       p2pStatus = "disconnected";
+      removeKillSwitch();
     }
-    
+
     sendResponse({ success: true, isConnected: isVPNEnabled });
   } catch (err) {
     isVPNEnabled = false;
@@ -441,20 +412,18 @@ async function handleToggleVPN(message, sendResponse) {
 async function handleSetExitLocation(message, sendResponse) {
   try {
     const { location } = message;
-    
-    // Validate the location exists
+
     const node = P2P_NODES.find(n => n.id === location);
     if (!node) {
       throw new Error(`Invalid P2P location: ${location}`);
     }
-    
+
     exitLocation = location;
-    
+
     if (isVPNEnabled) {
-      // Re-establish connection through new node
       await establishP2PConnection(location);
     }
-    
+
     sendResponse({ success: true });
   } catch (err) {
     sendResponse({ success: false, error: err.message });
@@ -465,6 +434,13 @@ async function handleSetExitLocation(message, sendResponse) {
 function handleUpdateKillSwitch(message, sendResponse) {
   killSwitchEnabled = message.enabled;
   chrome.storage.local.set({ killSwitch_preston_vpn: killSwitchEnabled });
+
+  if (killSwitchEnabled) {
+    installKillSwitch();
+  } else {
+    removeKillSwitch();
+  }
+
   sendResponse({ success: true });
   return true;
 }
@@ -472,9 +448,9 @@ function handleUpdateKillSwitch(message, sendResponse) {
 function handleGetStatus(message, sendResponse) {
   sendResponse({
     success: true,
-    isConnected: isVPNEnabled && !!exitLocation,
+    isConnected: isP2PConnected && !!activeExitNode,
     ip: currentIP,
-    location: exitLocation,
+    location: activeExitNode?.id || null,
     p2pStatus: p2pStatus
   });
   return true;
@@ -486,7 +462,7 @@ async function handleGetPreviousState(message, sendResponse) {
       "exitLocation_preston_vpn",
       "killSwitch_preston_vpn"
     ]);
-    
+
     sendResponse({
       success: true,
       isConnected: isVPNEnabled,
@@ -500,7 +476,6 @@ async function handleGetPreviousState(message, sendResponse) {
 }
 
 function handlePopupClosing(message, sendResponse) {
-  // No-op - we don't persist anything
   sendResponse({ success: true });
   return true;
 }
@@ -508,9 +483,8 @@ function handlePopupClosing(message, sendResponse) {
 function handleSettingsChanged(message, sendResponse) {
   const { settings } = message;
   if (settings) {
-    // Apply settings without storing them
     if (settings.dnsLeakProtection) {
-      // Apply DNS leak protection via content scripts
+      // DNS leak protection handled by content scripts
     }
   }
   sendResponse({ success: true });
@@ -518,13 +492,11 @@ function handleSettingsChanged(message, sendResponse) {
 }
 
 function handleAppHidden(message, sendResponse) {
-  // Browser popup hidden - keep VPN state intact
   sendResponse({ success: true });
   return true;
 }
 
 function handleAppVisible(message, sendResponse) {
-  // Popup visible again - send fresh status
   sendResponse({ success: true });
   return true;
 }
@@ -533,21 +505,15 @@ function handleAppVisible(message, sendResponse) {
 // Lifecycle Events (No-Logs Enforcement)
 // ============================================================
 
-// On browser startup - do NOT auto-connect (no forced sign-in/account required)
 chrome.runtime.onStartup.addListener(() => {
   console.log("Preston VPN started - no auto-connect, no account required");
 });
 
-// On extension install
 chrome.runtime.onInstalled.addListener(() => {
   console.log("Preston VPN installed - ready for P2P connections");
-  // Set default kill switch to enabled
   chrome.storage.local.set({ killSwitch_preston_vpn: true });
 });
 
-// CRITICAL (No-Logs Policy): On suspend/disable - immediately purge all IP data
 chrome.runtime.onSuspend.addListener(() => {
   purgeAllData();
 });
-
-chrome.runtime.setUnboundedEvaluatorAttributes?.({});
