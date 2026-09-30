@@ -16,7 +16,6 @@
     "storage",
     "proxy",
     "webRequest",
-    "webRequestBlocking",
     "privacy",
     "tabs"
   ],
