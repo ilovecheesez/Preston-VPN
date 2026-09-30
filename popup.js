@@ -81,7 +81,9 @@ class PrestonVPN {
       { value: "p2p-laholm.se", label: "Laholm, Sweden" },
       { value: "p2p-doha.qa", label: "Doha, Qatar" },
       { value: "p2p-mebaireek.qa", label: "Mebaireek, Qatar" },
-      { value: "p2p-kuwait-city.kw", label: "Kuwait City, Kuwait" }
+      { value: "p2p-kuwait-city.kw", label: "Kuwait City, Kuwait" },
+      { value: "p2p-islamabad.pk", label: "Islamabad, Pakistan" },
+      { value: "p2p-lahore.pk", label: "Lahore, Pakistan" }
     ];
 
     this.init();
@@ -187,10 +189,7 @@ class PrestonVPN {
         this.updateConnectionUI(isEnabled);
         this.setConnectingState(false);
         
-        if (isEnabled) {
-          document.getElementById("locationSection").style.display = "block";
-        } else {
-          document.getElementById("locationSection").style.display = "none";
+        if (!isEnabled) {
           document.getElementById("locationSelect").value = "";
           this.currentLocation = null;
         }
